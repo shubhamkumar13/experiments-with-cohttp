@@ -1,0 +1,25 @@
+{
+  "name": "@ligo/shubham",
+  "version": "1.0.0",
+  "dependencies": {
+    "ligo-extendable-fa2": "1.0.4",
+    "@ligo/permit": "1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com:shubhamkumar13/experiments-with-cohttp.git"
+  },
+  "author": "ligoLANG <https://ligolang.org/>",
+  "main": "src/main.mligo",
+  "license": "MIT",
+  "description": "An example of permit contract (TZIP-17) written in cameligo",
+  "bugs": {
+    "url": "https://github.com/shubhamkumar13/experiments-with-cohttp.git/issues"
+  },
+  "homepage": "",
+  "keywords": [
+    "tezos",
+    "ligo",
+    "blockchain"
+  ]
+}

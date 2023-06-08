@@ -5,27 +5,18 @@ open Lwt.Syntax
 open Lwt.Infix
 
 let ( // ) a b = a ^ "/" ^ b
+let package_path = Sys.getcwd () // "package.json"
+let package_json = Json.from_file package_path
 let ligo_package_dir = "." // ".ligo" // "source" // "i"
-let baseurl = "https://packages.ligolang.org/-/api/@ligo"
-let toplevel_packages = [ ("permit", "1.0.0"); ("fa", "1.0.0") ]
-let find_latest_version url = "1.0.0"
+let baseurl = "https://packages.ligolang.org/-/api"
 let get_pkg_url pkg = baseurl // pkg
 
-let get_tarball_url pkg json =
-  let trim s = String.split_on_char '\"' s |> fun lst -> List.nth lst 1 in
-  let url = baseurl // fst pkg in
-  let version = if snd pkg == "" then find_latest_version url else snd pkg in
-  let tarball_url json =
-    Json.Util.(
-      member "versions" json |> member version |> member "dist"
-      |> member "tarball")
-    |> Json.to_string
-  in
-  tarball_url json |> trim
+let toplevel_pkgs package_json =
+  Json.Util.member "dependencies" package_json
+  |> Json.Util.to_assoc
+  |> List.map (fun (k, v) -> (k, Json.to_string v))
 
-let tarball_name url =
-  url |> Uri.to_string |> String.trim |> String.split_on_char '/' |> List.rev
-  |> List.hd
+let trim s = String.split_on_char '\"' s |> fun lst -> List.nth lst 1
 
 let get_json pkg =
   let* _, body =
@@ -33,6 +24,34 @@ let get_json pkg =
   in
   let* body = Cohttp_lwt.Body.to_string body in
   Json.from_string body |> Lwt.return
+
+let find_latest_version name =
+  let* json = get_json name in
+  Json.Util.(
+    member "dist-tags" json |> member "latest" |> Json.to_string |> trim)
+  |> Lwt.return
+
+let check_format name version =
+  if String.contains version '^' || String.contains version '~' then
+    find_latest_version name
+  else Lwt.return version
+
+let get_tarball_url pkg json =
+  let url = baseurl // fst pkg in
+  let* version =
+    if snd pkg == "" then find_latest_version url else Lwt.return @@ snd pkg
+  in
+  let tarball_url json =
+    Json.Util.(
+      member "versions" json |> member version |> member "dist"
+      |> member "tarball")
+    |> Json.to_string
+  in
+  tarball_url json |> trim |> Lwt.return
+
+let tarball_name url =
+  url |> Uri.to_string |> String.trim |> String.split_on_char '/' |> List.rev
+  |> List.hd
 
 module De = De
 module Gz = Gz
@@ -137,7 +156,10 @@ let do_request pkgs =
     | [] -> Lwt.return_unit
     | (pkg, ver) :: rest ->
         let* json = get_json pkg in
-        let url = Uri.of_string @@ tarball_url (pkg, ver) json in
+        let* url =
+          tarball_url (pkg, ver) json >>= fun url ->
+          Lwt.return @@ Uri.of_string url
+        in
         download_response url >>= fun _ -> aux rest
   in
   aux pkgs >>= fun _ ->
@@ -192,4 +214,80 @@ let _print_list_list_lwt monster =
     lst_lst
   |> Lwt.return
 
-let _ = Lwt_main.run @@ do_request toplevel_packages
+(* create index.json *)
+(* {
+     "root" : "<name-from-package.json>@link-dev:./package.json"
+     "node" : {
+       "<name-of-dependency-in-package.json>@<version>@<some-hash>" : {
+         "id" : "<name-of-dependency-in-package.json>@<version>@<some-hash>",
+         "name": "<name-of-dependency-in-package.json>",
+         "version": "<version>",
+         "source": {
+           "type" : "install",
+           "source": [
+             "archive:https://packages.ligolang.org/-/api/<dependency-name>/-/<dependency-name>-<version>.tgz#sha1:<shasum-in-api-json>"
+           ]
+         },
+         "overrides": [],
+         "dependencies":["<array-of-deps-in-api-json>"],
+         "devDependencies":["<array-of-dev-deps-in-api-json>"]
+       },
+       ...
+       ...
+       do the same for all deps
+     },
+     "<name-from-package.json>@link-dev:./package.json": {
+       "id" : "<name-from-package.json>@link-dev:./package.json",
+       "name" : "<name-from-package.json>",
+       "version": "link-dev:./package.json",
+       "source": {
+         "type": "link-dev",
+         "path": ".",
+         "manifest": "package.json"
+       },
+       "overrides":[],
+       "dependencies":["<dependency-in-api-json>@<version>@<some-hash>"],
+       "devDependencies": []
+     }
+   } *)
+let get_package_tree package_json =
+  let dependencies = Json.Util.member "dependencies" package_json in
+  let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
+  let version =
+    Json.Util.member "version" package_json |> Json.to_string |> trim
+  in
+  let dependencies =
+    match Json.Util.(to_option to_assoc dependencies) with
+    | None -> []
+    | Some lst ->
+        List.map
+          (fun (name, version) -> (name, Json.to_string version |> trim))
+          lst
+  in
+  let rec loop dependencies acc =
+    match dependencies with
+    | [] -> Lwt.return acc
+    | (name, version) :: rest ->
+        let* version = check_format name version in
+        let* json = get_json name in
+        let json = Json.Util.(member "versions" json |> member version) in
+        let rest =
+          match
+            Json.Util.(member "dependencies" json |> to_option to_assoc)
+          with
+          | None -> rest
+          | Some lst ->
+              rest
+              @ List.map
+                  (fun (name, version) ->
+                    (name, Json.to_string version |> trim))
+                  lst
+        in
+        let acc = json :: acc in
+        loop rest acc
+  in
+  loop dependencies []
+
+let _ =
+  (* Printf.printf "%s\n" @@ Json.to_string package_json; *)
+  Lwt_main.run @@ get_package_tree package_json
