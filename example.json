@@ -1,0 +1,34 @@
+{
+    "name": "@ligo/math-lib",
+    "author": {
+        "name": "ligoLANG <https://ligolang.org/>"
+    },
+    "main": "lib.mligo",
+    "type": "library",
+    "storage_fn": null,
+    "storage_arg": null,
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ligolang/math-lib-cameligo.git"
+    },
+    "version": "1.0.0",
+    "description": "A math library for LIGO with support for Float & Rational numbers",
+    "scripts": {},
+    "dependencies": {
+        "a": "1.0.0",
+        "b": "1.0.4"
+    },
+    "devDependencies": {},
+    "bugs": {
+        "url": "https://github.com/ligolang/math-lib-cameligo/issues"
+    },
+    "_id": "@ligo/math-lib@1.0.0",
+    "dist": {
+        "integrity": "sha512-OTQ4NmIzYjlkY2U5NzYwOGJmYzQ2NjkwZjA3OGRjMDlhMDdhNTk2OGNlZmUzMTMzOTMxNGY4MmRhODQ0MTQ5ZWU5MmQ2MTgzM2RmMzljNmEwY2U2ZTMzMDJhZDI4YzFmODVmYzIxZmMxZjFmMGMxOTk0NDc1Y2I3ZGJiZDQwNGM=",
+        "shasum": "4da8ca3b1eef84c0683d0b01e28ec70b6679e0e5",
+        "tarball": "https://packages.ligolang.org/-/api/@ligo/math-lib/-/@ligo/math-lib-1.0.0.tgz",
+        "fileCount": 25,
+        "unpackedSize": 64604
+    },
+    "contributors": []
+}

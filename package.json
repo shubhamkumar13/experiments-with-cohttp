@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "dependencies": {
     "ligo-extendable-fa2": "1.0.4",
-    "@ligo/permit": "1.0.0"
+    "@ligo/permit": "1.0.0",
+    "checker": "0.1.0"
   },
   "repository": {
     "type": "git",

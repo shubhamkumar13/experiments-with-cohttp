@@ -250,7 +250,7 @@ let _print_list_list_lwt monster =
        "devDependencies": []
      }
    } *)
-let get_package_tree package_json =
+let get_dep_json_list package_json =
   let dependencies = Json.Util.member "dependencies" package_json in
   let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
   let version =
@@ -286,8 +286,135 @@ let get_package_tree package_json =
         let acc = json :: acc in
         loop rest acc
   in
-  loop dependencies []
+  loop dependencies [] >>= fun lst ->
+  List.iter (fun json -> Printf.printf "%s\n" @@ Json.to_string json) lst;
+  Lwt.return lst
+
+let create_index_node json : string * Json.t =
+  let name = Json.Util.member "name" json |> Json.to_string |> trim in
+  let version = Json.Util.member "version" json |> Json.to_string |> trim in
+  let key = name ^ "@" ^ version in
+  let id = ("id", `String key) in
+  let name = ("name", `String name) in
+  let version = ("version", `String version) in
+  let shasum =
+    Json.Util.(member "dist" json |> member "shasum") |> Json.to_string |> trim
+  in
+  let tarball =
+    Json.Util.(member "dist" json |> member "tarball") |> Json.to_string |> trim
+  in
+  let source =
+    let type_ = "install" in
+    let source = "archive:" ^ tarball ^ "#sha1:" ^ shasum in
+    ( "source",
+      `Assoc [ ("type", `String type_); ("source", `List [ `String source ]) ]
+    )
+  in
+  let overrides = ("overrides", `List []) in
+  let dependencies =
+    let deps = Json.Util.(member "dependencies" json |> to_option to_assoc) in
+    match deps with
+    | None -> ("dependencies", `List [])
+    | Some lst ->
+        let lst =
+          List.map
+            (fun (key, value) ->
+              `String (key ^ "@" ^ trim @@ Json.to_string value))
+            lst
+        in
+        ("dependencies", `List lst)
+  in
+  let dev_dependencies =
+    let deps =
+      Json.Util.(member "devDependencies" json |> to_option to_assoc)
+    in
+    match deps with
+    | None -> ("devDependencies", `List [])
+    | Some lst ->
+        let lst =
+          List.map
+            (fun (key, value) ->
+              `String (key ^ "@" ^ trim @@ Json.to_string value))
+            lst
+        in
+        ("devDependencies", `List lst)
+  in
+  let obj =
+    `Assoc
+      [ id; name; version; source; overrides; dependencies; dev_dependencies ]
+  in
+  (key, obj)
+
+let create_index_root_node json : string * Json.t =
+  let name = Json.Util.(member "name" json) |> Json.to_string |> trim in
+  let version = "link-dev:./package.json" in
+  let key = name ^ "@" ^ version in
+  let id = ("id", `String key) in
+  let name = ("name", `String name) in
+  let version = ("version", `String version) in
+  let source =
+    let type_ = ("type", `String "link-dev") in
+    let path = ("path", `String ".") in
+    let manifest = ("manifest", `String "package.json") in
+    ("source", `Assoc [ type_; path; manifest ])
+  in
+  let overrides = ("overrides", `List []) in
+  let dependencies =
+    let deps = Json.Util.(member "dependencies" json |> to_option to_assoc) in
+    match deps with
+    | None -> ("dependencies", `List [])
+    | Some lst ->
+        let lst =
+          List.map
+            (fun (key, value) ->
+              `String (key ^ "@" ^ trim @@ Json.to_string value))
+            lst
+        in
+        ("dependencies", `List lst)
+  in
+  let dev_dependencies =
+    let deps =
+      Json.Util.(member "devDependencies" json |> to_option to_assoc)
+    in
+    match deps with
+    | None -> ("devDependencies", `List [])
+    | Some lst ->
+        let lst =
+          List.map
+            (fun (key, value) ->
+              `String (key ^ "@" ^ trim @@ Json.to_string value))
+            lst
+        in
+        ("devDependencies", `List lst)
+  in
+  let obj =
+    `Assoc
+      [ id; name; version; source; overrides; dependencies; dev_dependencies ]
+  in
+  (key, obj)
+
+let create_index_json dep_json_list : Json.t =
+  let rec loop json_list lst =
+    match json_list with
+    | [] -> List.rev lst
+    | json :: rest -> loop rest (create_index_node json :: lst)
+  in
+  let root_node = create_index_root_node package_json in
+  let root =
+    let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
+    ("root", `String (name ^ "@" ^ "link-dev:./package.json"))
+  in
+  let node = ("node", `Assoc (loop dep_json_list [] @ [ root_node ])) in
+  `Assoc [ root; node ]
+
+let main package_json =
+  let* dep_json_list = get_dep_json_list package_json in
+  (* create_installation_json dep_json_list >>= fun _ -> *)
+  let index_json = create_index_json dep_json_list in
+  (* let* pkg_ver_list = get_pkg_ver_list dep_json_list in
+     do_request pkg_ver_list *)
+  Printf.printf "%s\n" @@ Json.to_string index_json |> Lwt.return
 
 let _ =
   (* Printf.printf "%s\n" @@ Json.to_string package_json; *)
-  Lwt_main.run @@ get_package_tree package_json
+  Lwt_main.run @@ main package_json
