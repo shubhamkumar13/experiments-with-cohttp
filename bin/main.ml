@@ -4,6 +4,17 @@ module Cohttp_lwt = Cohttp_lwt
 open Lwt.Syntax
 open Lwt.Infix
 
+module List = struct
+  include List
+
+  let dedup lst =
+    let rec aux acc = function
+      | [] -> acc
+      | hd :: tl -> if List.mem hd acc then aux acc tl else aux (hd :: acc) tl
+    in
+    List.rev (aux [] lst)
+end
+
 let ( // ) a b = a ^ "/" ^ b
 let package_path = Sys.getcwd () // "package.json"
 let package_json = Json.from_file package_path
@@ -35,19 +46,6 @@ let check_format name version =
   if String.contains version '^' || String.contains version '~' then
     find_latest_version name
   else Lwt.return version
-
-let get_tarball_url pkg json =
-  let url = baseurl // fst pkg in
-  let* version =
-    if snd pkg == "" then find_latest_version url else Lwt.return @@ snd pkg
-  in
-  let tarball_url json =
-    Json.Util.(
-      member "versions" json |> member version |> member "dist"
-      |> member "tarball")
-    |> Json.to_string
-  in
-  tarball_url json |> trim |> Lwt.return
 
 let tarball_name url =
   url |> Uri.to_string |> String.trim |> String.split_on_char '/' |> List.rev
@@ -139,71 +137,74 @@ let untar ~dest_dir fname =
   let () = Tar_unix.Archive.extract move fd in
   Unix.close fd
 
-let download_response url =
+let download_response url filename =
   let* body =
     Cohttp_lwt_unix.Client.get url >>= fun (_, body) -> Lwt.return body
   in
   let stream = Cohttp_lwt.Body.to_stream body in
-  Lwt_io.with_file ~mode:Lwt_io.output
-    (ligo_package_dir // tarball_name url)
+  Lwt_io.with_file ~mode:Lwt_io.output (ligo_package_dir // filename)
     (fun chan -> Lwt_stream.iter_s (Lwt_io.write chan) stream)
 
-let do_request pkgs =
+let do_request index_json =
   Sys.command @@ "mkdir -p " ^ ligo_package_dir |> fun _ ->
-  let tarball_url (pkg, ver) json = get_tarball_url (pkg, ver) json in
-  let rec aux pkgs =
-    match pkgs with
+  let tarball_url json =
+    Json.Util.(
+      member "source" json |> member "source" |> to_list |> filter_string)
+    |> List.hd
+    |> Str.(split @@ regexp "archive:")
+    |> List.hd
+    |> Str.(split @@ regexp "#")
+    |> List.hd
+  in
+  let rec aux json_list =
+    match json_list with
     | [] -> Lwt.return_unit
-    | (pkg, ver) :: rest ->
-        let* json = get_json pkg in
-        let* url =
-          tarball_url (pkg, ver) json >>= fun url ->
-          Lwt.return @@ Uri.of_string url
+    | (name, json) :: rest ->
+        let url = tarball_url json |> Uri.of_string in
+        let info = Str.(split @@ regexp "@") name in
+        let name =
+          (List.hd info |> Str.(split @@ regexp "/")) |> fun lst ->
+          List.nth lst (List.length lst - 1)
         in
-        download_response url >>= fun _ -> aux rest
+        let version = List.nth info 1 in
+        let filename = name ^ "-" ^ version ^ ".tgz" in
+        download_response url filename >>= fun _ -> aux rest
   in
-  aux pkgs >>= fun _ ->
-  let is_tgz file =
-    String.split_on_char '.' file |> List.rev |> List.hd |> ( = ) "tgz"
+  let json_list =
+    Json.Util.member "node" index_json
+    |> Json.Util.to_assoc |> List.dedup |> List.rev |> List.tl |> List.rev
   in
-  let files =
-    Sys.readdir ligo_package_dir |> Array.to_list |> List.filter is_tgz
-  in
-  (* List.iter (fun file -> Printf.printf "%s\n" file) files; *)
-  (* Printf.printf "%d\n" @@ List.length files; *)
+  aux json_list >>= fun _ ->
   List.iter
-    (fun file ->
-      let pkg_name, version =
-        let lst = String.split_on_char '-' file in
-        let pkg_name = List.hd lst in
-        let version =
-          List.tl lst |> List.hd |> String.split_on_char '.' |> fun lst ->
-          let major = List.nth lst 0 in
-          let minor = List.nth lst 1 in
-          let patch = List.nth lst 2 in
-          major ^ "." ^ minor ^ "." ^ patch
-        in
-        (pkg_name, version)
+    (fun (name, _) ->
+      let info = Str.(split @@ regexp "@") name in
+      let dirname, name =
+        (List.hd info |> Str.(split @@ regexp "/")) |> fun lst ->
+        match List.nth_opt lst 1 with
+        | None -> (List.nth lst 0, List.nth lst 0)
+        | Some name -> ("ligo__s__" ^ name, name)
       in
-      let dir = ligo_package_dir // ("ligo__s__" ^ pkg_name ^ "__" ^ version) in
+      let version = List.nth info 1 in
+      let dir = ligo_package_dir // (dirname ^ "__" ^ version) in
       Sys.command ("mkdir -p " ^ dir) |> fun _ ->
-      let file = ligo_package_dir // file in
+      let file = ligo_package_dir // (name ^ "-" ^ version ^ ".tgz") in
       unzip file |> Result.map (untar ~dest_dir:dir) |> fun res ->
       match res with
       | Error _ -> failwith "Error while untaring to a dir"
       | Ok _ -> ())
+    json_list;
+  let files =
+    Sys.readdir ligo_package_dir
+    |> Array.to_list
+    |> List.filter (fun file ->
+           not @@ Sys.is_directory (ligo_package_dir // file))
+  in
+  List.iter
+    (fun file ->
+      Printf.printf "%s\n" file;
+      Sys.remove (ligo_package_dir // file))
     files;
-  let files = Sys.readdir ligo_package_dir |> Array.to_list in
-  List.filter
-    (fun file -> not @@ Sys.is_directory (ligo_package_dir // file))
-    files
-  |> List.iter (fun file -> Sys.remove (ligo_package_dir // file))
-  |> Lwt.return
-
-(* List.map (fun pkg ->
-   let* json = get_json @@ fst pkg in
-   download_to_a_file @@ get_tarball_url pkg json) pkgs |>
-   |> Lwt.return *)
+  Printf.printf "%d\n" @@ List.length files |> Lwt.return
 
 let _print_list_list_lwt monster =
   let* lst_lst = monster in
@@ -214,42 +215,6 @@ let _print_list_list_lwt monster =
     lst_lst
   |> Lwt.return
 
-(* create index.json *)
-(* {
-     "root" : "<name-from-package.json>@link-dev:./package.json"
-     "node" : {
-       "<name-of-dependency-in-package.json>@<version>@<some-hash>" : {
-         "id" : "<name-of-dependency-in-package.json>@<version>@<some-hash>",
-         "name": "<name-of-dependency-in-package.json>",
-         "version": "<version>",
-         "source": {
-           "type" : "install",
-           "source": [
-             "archive:https://packages.ligolang.org/-/api/<dependency-name>/-/<dependency-name>-<version>.tgz#sha1:<shasum-in-api-json>"
-           ]
-         },
-         "overrides": [],
-         "dependencies":["<array-of-deps-in-api-json>"],
-         "devDependencies":["<array-of-dev-deps-in-api-json>"]
-       },
-       ...
-       ...
-       do the same for all deps
-     },
-     "<name-from-package.json>@link-dev:./package.json": {
-       "id" : "<name-from-package.json>@link-dev:./package.json",
-       "name" : "<name-from-package.json>",
-       "version": "link-dev:./package.json",
-       "source": {
-         "type": "link-dev",
-         "path": ".",
-         "manifest": "package.json"
-       },
-       "overrides":[],
-       "dependencies":["<dependency-in-api-json>@<version>@<some-hash>"],
-       "devDependencies": []
-     }
-   } *)
 let get_dep_json_list package_json =
   let dependencies = Json.Util.member "dependencies" package_json in
   let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
@@ -286,9 +251,7 @@ let get_dep_json_list package_json =
         let acc = json :: acc in
         loop rest acc
   in
-  loop dependencies [] >>= fun lst ->
-  List.iter (fun json -> Printf.printf "%s\n" @@ Json.to_string json) lst;
-  Lwt.return lst
+  loop dependencies []
 
 let create_index_node json : string * Json.t =
   let name = Json.Util.member "name" json |> Json.to_string |> trim in
@@ -407,13 +370,51 @@ let create_index_json dep_json_list : Json.t =
   let node = ("node", `Assoc (loop dep_json_list [] @ [ root_node ])) in
   `Assoc [ root; node ]
 
+(* Do this after downloading tarball *)
+let create_installation_json () =
+  (* let make_entry json =
+     let name = Json.Util.member "name" json |> Json.to_string |> trim in
+     let version = Json.Util.member "version" json |> Json.to_string |> trim in *)
+  let files =
+    Sys.readdir (Sys.getcwd () // ".ligo" // "source" // "i") |> Array.to_list
+  in
+  let create_json files : Json.t =
+    match files with
+    | [] -> failwith "The directory .ligo/source/i is empty"
+    | files ->
+        let get_info file =
+          file |> String.split_on_char '/' |> fun lst ->
+          List.nth lst (List.length lst - 1) |> Str.split (Str.regexp "__")
+        in
+        List.iter
+          (fun file -> List.iter (Printf.printf "%s\n") (get_info file))
+          files;
+        let name lst = List.nth lst 0 in
+        let version lst = List.nth lst 1 in
+        let keys =
+          List.map
+            (fun s ->
+              let info = get_info s in
+              (* List.iter (Printf.printf "%s\n") info; *)
+              name info ^ "@" ^ version info)
+            files
+        in
+        let pairs =
+          List.map2 (fun key value -> (key, `String value)) keys files
+        in
+        `Assoc pairs
+  in
+  create_json files
+
+let get_name_ver dep_json =
+  let name = Json.Util.member "name" dep_json |> Json.to_string |> trim in
+  let version = Json.Util.member "version" dep_json |> Json.to_string |> trim in
+  (name, version)
+
 let main package_json =
   let* dep_json_list = get_dep_json_list package_json in
-  (* create_installation_json dep_json_list >>= fun _ -> *)
   let index_json = create_index_json dep_json_list in
-  (* let* pkg_ver_list = get_pkg_ver_list dep_json_list in
-     do_request pkg_ver_list *)
-  Printf.printf "%s\n" @@ Json.to_string index_json |> Lwt.return
+  do_request index_json >>= Lwt.return
 
 let _ =
   (* Printf.printf "%s\n" @@ Json.to_string package_json; *)

@@ -11,7 +11,8 @@
   decompress.de
   decompress.gz
   tar-unix
-  fpath))
+  fpath
+  str))
 
 (env
  (dev
