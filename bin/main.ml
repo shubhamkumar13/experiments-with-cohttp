@@ -21,6 +21,8 @@ let package_json = Json.from_file package_path
 let ligo_package_dir = "." // ".ligo" // "source" // "i"
 let baseurl = "https://packages.ligolang.org/-/api"
 let get_pkg_url pkg = baseurl // pkg
+let esy_lock_dir = Sys.getcwd () // "esy.lock"
+let underscore_esy = Sys.getcwd () // "_esy" // "default"
 
 let toplevel_pkgs package_json =
   Json.Util.member "dependencies" package_json
@@ -199,12 +201,8 @@ let do_request index_json =
     |> List.filter (fun file ->
            not @@ Sys.is_directory (ligo_package_dir // file))
   in
-  List.iter
-    (fun file ->
-      Printf.printf "%s\n" file;
-      Sys.remove (ligo_package_dir // file))
-    files;
-  Printf.printf "%d\n" @@ List.length files |> Lwt.return
+  List.iter (fun file -> Sys.remove (ligo_package_dir // file)) files
+  |> Lwt.return
 
 let _print_list_list_lwt monster =
   let* lst_lst = monster in
@@ -368,10 +366,13 @@ let create_index_json dep_json_list : Json.t =
     ("root", `String (name ^ "@" ^ "link-dev:./package.json"))
   in
   let node = ("node", `Assoc (loop dep_json_list [] @ [ root_node ])) in
-  `Assoc [ root; node ]
+  let index_json = `Assoc [ root; node ] in
+  Sys.command @@ "mkdir -p " ^ esy_lock_dir |> fun _ ->
+  Json.to_file (esy_lock_dir // "index.json") index_json;
+  index_json
 
 (* Do this after downloading tarball *)
-let create_installation_json () =
+let create_installation_json () : Json.t =
   (* let make_entry json =
      let name = Json.Util.member "name" json |> Json.to_string |> trim in
      let version = Json.Util.member "version" json |> Json.to_string |> trim in *)
@@ -382,29 +383,23 @@ let create_installation_json () =
     match files with
     | [] -> failwith "The directory .ligo/source/i is empty"
     | files ->
-        let get_info file =
-          file |> String.split_on_char '/' |> fun lst ->
-          List.nth lst (List.length lst - 1) |> Str.split (Str.regexp "__")
+        let get_key file =
+          let lst = Str.(split @@ regexp "__") file in
+          if String.equal (List.hd lst) "ligo" then
+            ("@ligo" // List.nth lst 2) ^ "@" ^ List.nth lst 3
+          else List.nth lst 0 ^ "@" ^ List.nth lst 1
         in
-        List.iter
-          (fun file -> List.iter (Printf.printf "%s\n") (get_info file))
-          files;
-        let name lst = List.nth lst 0 in
-        let version lst = List.nth lst 1 in
-        let keys =
-          List.map
-            (fun s ->
-              let info = get_info s in
-              (* List.iter (Printf.printf "%s\n") info; *)
-              name info ^ "@" ^ version info)
-            files
-        in
+        let keys = List.map get_key files in
         let pairs =
           List.map2 (fun key value -> (key, `String value)) keys files
         in
         `Assoc pairs
   in
-  create_json files
+  List.iter (Printf.printf "%s\n") files;
+  let installation_json = create_json files in
+  Sys.command @@ "mkdir -p " ^ underscore_esy |> fun _ ->
+  Json.to_file (underscore_esy // "installation.json") installation_json;
+  installation_json
 
 let get_name_ver dep_json =
   let name = Json.Util.member "name" dep_json |> Json.to_string |> trim in
@@ -414,7 +409,9 @@ let get_name_ver dep_json =
 let main package_json =
   let* dep_json_list = get_dep_json_list package_json in
   let index_json = create_index_json dep_json_list in
-  do_request index_json >>= Lwt.return
+  do_request index_json >>= fun _ ->
+  let installation_json = create_installation_json () in
+  Lwt.return_unit
 
 let _ =
   (* Printf.printf "%s\n" @@ Json.to_string package_json; *)
