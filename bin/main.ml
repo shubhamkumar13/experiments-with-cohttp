@@ -22,7 +22,6 @@ let ligo_package_dir = "." // ".ligo" // "source" // "i"
 let baseurl = "https://packages.ligolang.org/-/api"
 let get_pkg_url pkg = baseurl // pkg
 let esy_lock_dir = Sys.getcwd () // "esy.lock"
-let underscore_esy = Sys.getcwd () // "_esy" // "default"
 
 let toplevel_pkgs package_json =
   Json.Util.member "dependencies" package_json
@@ -215,10 +214,10 @@ let _print_list_list_lwt monster =
 
 let get_dep_json_list package_json =
   let dependencies = Json.Util.member "dependencies" package_json in
-  let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
-  let version =
-    Json.Util.member "version" package_json |> Json.to_string |> trim
-  in
+  (* let name = Json.Util.member "name" package_json |> Json.to_string |> trim in
+     let version =
+       Json.Util.member "version" package_json |> Json.to_string |> trim
+     in *)
   let dependencies =
     match Json.Util.(to_option to_assoc dependencies) with
     | None -> []
@@ -395,10 +394,7 @@ let create_installation_json () : Json.t =
         in
         `Assoc pairs
   in
-  List.iter (Printf.printf "%s\n") files;
   let installation_json = create_json files in
-  Sys.command @@ "mkdir -p " ^ underscore_esy |> fun _ ->
-  Json.to_file (underscore_esy // "installation.json") installation_json;
   installation_json
 
 let get_name_ver dep_json =
