@@ -2,7 +2,7 @@
   "name": "@ligo/shubham",
   "version": "1.0.0",
   "dependencies": {
-    "@ligo/fa": "1.0.2",
+    "@ligo/fa": "1.0.4",
     "@ligo/permit": "1.0.0",
     "checker": "0.1.0"
   },

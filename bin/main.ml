@@ -213,16 +213,16 @@ let _print_list_list_lwt monster =
     lst_lst
   |> Lwt.return
 
-let get_dep_json_list package_json =
+let get_dep_list package_json =
   let dependencies = Json.Util.member "dependencies" package_json in
-  let dependencies =
-    match Json.Util.(to_option to_assoc dependencies) with
-    | None -> []
-    | Some lst ->
-        List.map
-          (fun (name, version) -> (name, Json.to_string version |> trim))
-          lst
-  in
+  match Json.Util.(to_option to_assoc dependencies) with
+  | None -> []
+  | Some lst ->
+      List.map
+        (fun (name, version) -> (name, Json.to_string version |> trim))
+        lst
+
+let get_dep_json_list dep_list =
   let rec loop dependencies acc =
     match dependencies with
     | [] -> Lwt.return acc
@@ -245,7 +245,7 @@ let get_dep_json_list package_json =
         let acc = json :: acc in
         loop rest acc
   in
-  loop dependencies []
+  loop dep_list []
 
 let create_index_node json : string * Json.t =
   let name = Json.Util.member "name" json |> Json.to_string |> trim in
@@ -398,12 +398,92 @@ let get_name_ver dep_json =
   let version = Json.Util.member "version" dep_json |> Json.to_string |> trim in
   (name, version)
 
-let main package_json =
-  let* dep_json_list = get_dep_json_list package_json in
+let installation_json_exists () =
+  Sys.file_exists (underscore_esy // "installation.json")
+
+let index_json_exists () = Sys.file_exists (ligo_package_dir // "index.json")
+
+let current_dep_list () =
+  let json = Json.from_file @@ (underscore_esy // "installation.json") in
+  let dep_list = Json.Util.keys json in
+  let ligo_prefix_exists dep =
+    Str.(split @@ regexp "@") dep
+    |> List.hd
+    |> Str.(split @@ regexp "/")
+    |> List.hd |> String.equal "ligo"
+  in
+  List.map
+    (fun dep ->
+      if ligo_prefix_exists dep then
+        let name =
+          Str.(split @@ regexp "@") dep |> List.hd |> fun s -> "@" ^ s
+        in
+        let version = Str.(split @@ regexp "@") dep |> List.rev |> List.hd in
+        (name, version)
+      else
+        let name = Str.(split @@ regexp "@") dep |> List.hd in
+        let version = Str.(split @@ regexp "@") dep |> List.rev |> List.hd in
+        (name, version))
+    dep_list
+
+let find_dep_diff current_list new_list =
+  List.filter (fun e -> not @@ List.mem e current_list) new_list
+
+let install_from_scratch dep_list =
+  let* dep_json_list = get_dep_json_list dep_list in
   let index_json = create_index_json dep_json_list in
   do_request index_json >>= fun _ ->
-  let installation_json = create_installation_json () in
+  let _installation_json = create_installation_json () in
   Lwt.return_unit
+
+let main package_json =
+  let dep_list = get_dep_list package_json in
+  match index_json_exists () with
+  | true -> (
+      match installation_json_exists () with
+      | true -> (
+          (* If index.json and installation.json exist that implies new packages or updated version needs to be installed  *)
+          let dep_list_diff = find_dep_diff (current_dep_list ()) dep_list in
+          match dep_list_diff with
+          | [] -> Lwt.return_unit
+          | _ ->
+              Sys.rmdir esy_lock_dir;
+              Sys.rmdir underscore_esy;
+              Sys.rmdir ligo_package_dir;
+
+              let* dep_json_list = get_dep_json_list dep_list in
+              let index_json = create_index_json dep_json_list in
+              do_request index_json >>= fun _ ->
+              let _installation_json = create_installation_json () in
+              Lwt.return_unit)
+      | false ->
+          failwith
+          @@ Printf.sprintf
+               "%s file is missing please delete the %s file and do a fresh \
+                ligo install"
+               (underscore_esy // "installation.json")
+               (esy_lock_dir // "index.json"))
+  | false ->
+      (* if index.json doesn't exist that implies a fresh install is needed *)
+      let* dep_json_list = get_dep_json_list dep_list in
+      let index_json = create_index_json dep_json_list in
+      do_request index_json >>= fun _ ->
+      let _installation_json = create_installation_json () in
+      Lwt.return_unit
+(* if installation_json_exists () then (
+     let current_dep_list = current_dep_list () in
+     let dep_list_diff = diff_list current_dep_list dep_list in
+     let* dep_json_list = get_dep_json_list dep_list_diff in
+     update_index_json dep_json_list;
+     update_ligo_pkgs index_json;
+     update_installation_json () |> Lwt.return)
+   else *)
+(* let* dep_json_list = get_dep_json_list dep_list in
+   let index_json = create_index_json dep_json_list in
+   do_request index_json >>= fun _ ->
+   let installation_json = create_installation_json () in *)
+(* List.iter (fun (k, v) -> Printf.printf "%s -> %s\n" k v) diff_list;
+   Lwt.return_unit *)
 
 let _ =
   (* Printf.printf "%s\n" @@ Json.to_string package_json; *)
