@@ -24,6 +24,11 @@ let get_pkg_url pkg = baseurl // pkg
 let esy_lock_dir = Sys.getcwd () // "esy.lock"
 let underscore_esy = "." // "_esy" // "default"
 
+let generate_random_uuid () =
+  let rand () = Random.State.make_self_init () in
+  let uuid = Uuidm.v4_gen (rand ()) () in
+  Uuidm.v5 uuid "" |> Uuidm.to_string |> String.split_on_char '-' |> List.hd
+
 let toplevel_pkgs package_json =
   Json.Util.member "dependencies" package_json
   |> Json.Util.to_assoc
@@ -187,7 +192,10 @@ let do_request index_json =
         | Some name -> ("ligo__s__" ^ name, name)
       in
       let version = List.nth info 1 in
-      let dir = ligo_package_dir // (dirname ^ "__" ^ version) in
+      let dir =
+        ligo_package_dir
+        // (dirname ^ "__" ^ version ^ "__" ^ generate_random_uuid ())
+      in
       Sys.command ("mkdir -p " ^ dir) |> fun _ ->
       let file = ligo_package_dir // (name ^ "-" ^ version ^ ".tgz") in
       unzip file |> Result.map (untar ~dest_dir:dir) |> fun res ->

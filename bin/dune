@@ -12,6 +12,7 @@
   decompress.gz
   tar-unix
   fpath
+  uuidm
   str))
 
 (env
